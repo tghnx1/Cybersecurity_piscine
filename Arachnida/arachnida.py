@@ -1,15 +1,28 @@
 import sys
+import os
 from html.parser import HTMLParser
-from urllib.parse import urlparse
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin, urlparse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+"""Make validate() return parsed settings:
+URL
+recursive mode
+maximum depth, default 5
+output path, default ./data/
+Fetch the webpage with urllib.
+Parse HTML and extract image URLs.
+Download only:
+.jpg, .jpeg, .png, .gif, .bmp
+Save images under the selected path.
+Add recursive crawling with duplicate-URL protection and depth limiting.
+Add tests using a local HTTP server so tests do not depend on external websites."""
 
 # Default values required by the spider specification.
 DEFAULT_DEPTH = 5
 DEFAULT_PATH = "./data/"
 REQUEST_TIMEOUT = 10
+SUPPORTED_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".bmp")
 
 
 def error():
@@ -100,14 +113,80 @@ def extract_image_urls(html, page_url):
     image_urls = []
     seen = set()
     for source in parser.sources:
+        #print(source)
         image_url = urljoin(page_url, source)
+        #print(image_url)
         parsed_url = urlparse(image_url)
+        #print(parsed_url)
         if parsed_url.scheme not in ("http", "https"):
             continue
         if image_url not in seen:
             seen.add(image_url)
             image_urls.append(image_url)
     return image_urls
+
+
+def is_supported_image(url):
+    """Return True when a URL has one of the supported image extensions."""
+    path = urlparse(url).path.lower()
+    return path.endswith(SUPPORTED_EXTENSIONS)
+
+
+def filter_image_urls(image_urls):
+    """Keep only image URLs supported by the spider specification."""
+    return [url for url in image_urls if is_supported_image(url)]
+
+
+def image_filename(image_url):
+    """Return a safe filename taken from an image URL."""
+    path = unquote(urlparse(image_url).path)
+    filename = os.path.basename(path)
+    return filename if filename else None
+
+
+def unique_path(directory, filename):
+    """Choose a path that does not overwrite an existing image."""
+    path = os.path.join(directory, filename)
+    if not os.path.exists(path):
+        return path
+
+    name, extension = os.path.splitext(filename)
+    counter = 1
+    while True:
+        candidate = os.path.join(directory, f"{name}_{counter}{extension}")
+        if not os.path.exists(candidate):
+            return candidate
+        counter += 1
+
+
+def save_image(image_url, directory):
+    """Download one image and save it in directory; return its path."""
+    filename = image_filename(image_url)
+    if filename is None:
+        return None
+
+    content = fetch_page(image_url)
+    if content is None:
+        return None
+
+    os.makedirs(directory, exist_ok=True)
+    path = unique_path(directory, filename)
+    try:
+        with open(path, "wb") as image_file:
+            image_file.write(content)
+    except OSError:
+        return None
+    return path
+
+
+def save_images(image_urls, directory):
+    """Download all image URLs and return the paths saved successfully."""
+    saved_paths = []
+    for image_url in image_urls:
+        path = save_image(image_url, directory)
+        if path is not None:
+            saved_paths.append(path)
+    return saved_paths
 
 
 def validate(arguments):
@@ -170,7 +249,9 @@ def main():
         error()
         return 1
     image_urls = extract_image_urls(decode_page(page), settings["url"])
-    print(f"Found {len(image_urls)} image(s)")
+    image_urls = filter_image_urls(image_urls)
+    saved_paths = save_images(image_urls, settings["path"])
+    print(f"Downloaded {len(saved_paths)} image(s)")
     return 0
 
 

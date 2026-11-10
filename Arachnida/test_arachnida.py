@@ -1,4 +1,6 @@
 import io
+import os
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import MagicMock, patch
@@ -65,6 +67,54 @@ class TestHTMLParsing(unittest.TestCase):
             arachnida.extract_image_urls(html, "http://example.org/"),
             ["http://example.org/photo.jpg"],
         )
+
+    def test_filters_supported_extensions(self):
+        urls = [
+            "https://example.org/a.jpg",
+            "https://example.org/b.JPEG?size=large",
+            "https://example.org/c.png",
+            "https://example.org/d.gif",
+            "https://example.org/e.bmp",
+            "https://example.org/page.html",
+            "https://example.org/image.svg",
+            "https://example.org/download.jpg/file",
+        ]
+        self.assertEqual(
+            arachnida.filter_image_urls(urls),
+            [
+                "https://example.org/a.jpg",
+                "https://example.org/b.JPEG?size=large",
+                "https://example.org/c.png",
+                "https://example.org/d.gif",
+                "https://example.org/e.bmp",
+            ],
+        )
+
+
+class TestSavingImages(unittest.TestCase):
+    def test_image_filename(self):
+        self.assertEqual(
+            arachnida.image_filename("https://example.org/files/cat%20photo.jpg?x=1"),
+            "cat photo.jpg",
+        )
+        self.assertIsNone(arachnida.image_filename("https://example.org/"))
+
+    @patch("arachnida.fetch_page", return_value=b"image data")
+    def test_saves_image_in_selected_directory(self, mock_fetch):
+        with tempfile.TemporaryDirectory() as directory:
+            path = arachnida.save_image("https://example.org/cat.jpg", directory)
+            with open(path, "rb") as image_file:
+                self.assertEqual(image_file.read(), b"image data")
+            self.assertEqual(os.path.dirname(path), directory)
+            mock_fetch.assert_called_once_with("https://example.org/cat.jpg")
+
+    @patch("arachnida.fetch_page", return_value=b"image data")
+    def test_does_not_overwrite_duplicate_filenames(self, mock_fetch):
+        with tempfile.TemporaryDirectory() as directory:
+            first = arachnida.save_image("https://one.example/cat.jpg", directory)
+            second = arachnida.save_image("https://two.example/cat.jpg", directory)
+            self.assertEqual(os.path.basename(first), "cat.jpg")
+            self.assertEqual(os.path.basename(second), "cat_1.jpg")
 
 
 class TestArguments(unittest.TestCase):
